@@ -73,76 +73,109 @@ function HomeClient() {
   }, [announcement]);
 
   useEffect(() => {
-    const fetchRecommendData = async () => {
-      try {
-        setLoading(true);
+    const CACHE_DURATION = 60 * 60 * 1000; // 1小时
 
-        // 并行获取热门电影、热门剧集、热门综艺、番剧日历和热播短剧
-        const [moviesData, tvShowsData, varietyShowsData, bangumiCalendarData] =
-          await Promise.all([
-            getDoubanCategories({
-              kind: 'movie',
-              category: '热门',
-              type: '全部',
-            }),
+    const getCache = (key: string) => {
+      try {
+        const cached = localStorage.getItem(key);
+        if (!cached) return null;
+        const { data, timestamp } = JSON.parse(cached);
+        return { data, expired: Date.now() - timestamp > CACHE_DURATION };
+      } catch {
+        return null;
+      }
+    };
+
+    const setCache = (key: string, data: any) => {
+      try {
+        localStorage.setItem(key, JSON.stringify({ data, timestamp: Date.now() }));
+      } catch {}
+    };
+
+    const moviesCache = getCache('homepage_movies');
+    const tvShowsCache = getCache('homepage_tvshows');
+    const varietyCache = getCache('homepage_variety');
+    const bangumiCache = getCache('homepage_bangumi');
+    const duanjuCache = getCache('homepage_duanju');
+    const upcomingCache = getCache('homepage_upcoming');
+
+    if (moviesCache?.data) setHotMovies(moviesCache.data);
+    if (tvShowsCache?.data) setHotTvShows(tvShowsCache.data);
+    if (varietyCache?.data) setHotVarietyShows(varietyCache.data);
+    if (bangumiCache?.data) setBangumiCalendarData(bangumiCache.data);
+    if (duanjuCache?.data) setHotDuanju(duanjuCache.data);
+    if (upcomingCache?.data) setUpcomingContent(upcomingCache.data);
+
+    const hasCache = moviesCache || tvShowsCache || varietyCache || bangumiCache || duanjuCache || upcomingCache;
+    if (hasCache) setLoading(false);
+
+    const needsRefresh = !moviesCache || moviesCache.expired || !tvShowsCache || tvShowsCache.expired ||
+                         !varietyCache || varietyCache.expired || !bangumiCache || bangumiCache.expired ||
+                         !duanjuCache || duanjuCache.expired || !upcomingCache || upcomingCache.expired;
+
+    if (needsRefresh) {
+      (async () => {
+        try {
+          const [moviesData, tvShowsData, varietyShowsData, bangumiCalendarData] = await Promise.all([
+            getDoubanCategories({ kind: 'movie', category: '热门', type: '全部' }),
             getDoubanCategories({ kind: 'tv', category: 'tv', type: 'tv' }),
             getDoubanCategories({ kind: 'tv', category: 'show', type: 'show' }),
             GetBangumiCalendarData(),
           ]);
 
-        if (moviesData.code === 200) {
-          setHotMovies(moviesData.list);
-        }
-
-        if (tvShowsData.code === 200) {
-          setHotTvShows(tvShowsData.list);
-        }
-
-        if (varietyShowsData.code === 200) {
-          setHotVarietyShows(varietyShowsData.list);
-        }
-
-        setBangumiCalendarData(bangumiCalendarData);
-
-        // 获取热播短剧
-        try {
-          const duanjuResponse = await fetch('/api/duanju/recommends');
-          if (duanjuResponse.ok) {
-            const duanjuResult = await duanjuResponse.json();
-            if (duanjuResult.code === 200 && duanjuResult.data) {
-              setHotDuanju(duanjuResult.data);
-            }
+          if (moviesData.code === 200) {
+            setHotMovies(moviesData.list);
+            setCache('homepage_movies', moviesData.list);
           }
-        } catch (error) {
-          console.error('获取热播短剧数据失败:', error);
-        }
-
-        // 获取即将上映/播出内容（使用后端API缓存）
-        try {
-          const response = await fetch('/api/tmdb/upcoming');
-          if (response.ok) {
-            const result = await response.json();
-            if (result.code === 200 && result.data) {
-              // 按上映/播出日期升序排序（最近的排在前面）
-              const sortedContent = [...result.data].sort((a, b) => {
-                const dateA = new Date(a.release_date || '9999-12-31').getTime();
-                const dateB = new Date(b.release_date || '9999-12-31').getTime();
-                return dateA - dateB;
-              });
-              setUpcomingContent(sortedContent);
-            }
+          if (tvShowsData.code === 200) {
+            setHotTvShows(tvShowsData.list);
+            setCache('homepage_tvshows', tvShowsData.list);
           }
-        } catch (error) {
-          console.error('获取TMDB即将上映数据失败:', error);
-        }
-      } catch (error) {
-        console.error('获取推荐数据失败:', error);
-      } finally {
-        setLoading(false);
-      }
-    };
+          if (varietyShowsData.code === 200) {
+            setHotVarietyShows(varietyShowsData.list);
+            setCache('homepage_variety', varietyShowsData.list);
+          }
+          setBangumiCalendarData(bangumiCalendarData);
+          setCache('homepage_bangumi', bangumiCalendarData);
 
-    fetchRecommendData();
+          try {
+            const duanjuResponse = await fetch('/api/duanju/recommends');
+            if (duanjuResponse.ok) {
+              const duanjuResult = await duanjuResponse.json();
+              if (duanjuResult.code === 200 && duanjuResult.data) {
+                setHotDuanju(duanjuResult.data);
+                setCache('homepage_duanju', duanjuResult.data);
+              }
+            }
+          } catch (error) {
+            console.error('获取热播短剧数据失败:', error);
+          }
+
+          try {
+            const response = await fetch('/api/tmdb/upcoming');
+            if (response.ok) {
+              const result = await response.json();
+              if (result.code === 200 && result.data) {
+                const sorted = [...result.data].sort((a, b) => {
+                  const dateA = new Date(a.release_date || '9999-12-31').getTime();
+                  const dateB = new Date(b.release_date || '9999-12-31').getTime();
+                  return dateA - dateB;
+                });
+                setUpcomingContent(sorted);
+                setCache('homepage_upcoming', sorted);
+              }
+            }
+          } catch (error) {
+            console.error('获取TMDB即将上映数据失败:', error);
+          }
+
+          setLoading(false);
+        } catch (error) {
+          console.error('获取推荐数据失败:', error);
+          setLoading(false);
+        }
+      })();
+    }
   }, []);
 
 
